@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>PDF Dual Viewer — Scroll Sync + Highlight (mirror)</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+  :root{
+    --bg:#0e0e10;--panel:#16161a;--border:#2a2a32;
+    --accent:#5b6af0;--accent2:#22d3a5;--text:#e8e8f0;--muted:#6b6b80;
+    --hl-yellow:rgba(255,220,0,0.35);
+    --hl-green:rgba(0,220,130,0.35);
+    --hl-pink:rgba(255,80,160,0.35);
+    --hl-blue:rgba(80,160,255,0.35);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+
+  /* TOOLBAR */
+  .toolbar{height:52px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;flex-shrink:0;}
+  .logo{padding:0 18px;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;color:var(--accent);letter-spacing:.05em;border-right:1px solid var(--border);height:100%;display:flex;align-items:center;gap:6px;}
+  .toolbar-slots{display:flex;flex:1;height:100%;}
+  .slot{flex:1;display:flex;align-items:center;gap:8px;padding:0 14px;border-right:1px solid var(--border);min-width:0;}
+  .slot:last-child{border-right:none;}
+  .slot-label{font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;flex-shrink:0;}
+  .slot-label.a{color:var(--accent);} .slot-label.b{color:var(--accent2);}
+  .file-name{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;}
+  .file-name.empty{color:var(--muted);font-style:italic;}
+  .btn-load{flex-shrink:0;padding:4px 10px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:11px;font-family:'IBM Plex Mono',monospace;cursor:pointer;transition:all .15s;}
+  .btn-load:hover{border-color:var(--accent);color:var(--accent);}
+  .sync-indicator{padding:0 16px;display:flex;align-items:center;gap:8px;border-left:1px solid var(--border);height:100%;flex-shrink:0;}
+  .sync-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);transition:background .3s;}
+  .sync-dot.active{background:var(--accent2);box-shadow:0 0 6px var(--accent2);animation:blink 1.5s infinite;}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.3;}}
+  .sync-text{font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);}
+
+  /* COLOR PICKER in toolbar */
+  .hl-picker{padding:0 14px;display:flex;align-items:center;gap:6px;border-left:1px solid var(--border);height:100%;}
+  .hl-label{font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;}
+  .hl-swatch{width:18px;height:18px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .15s,border-color .15s;flex-shrink:0;}
+  .hl-swatch:hover{transform:scale(1.15);}
+  .hl-swatch.active{border-color:#fff;}
+  .hl-swatch.yellow{background:#ffd700;}
+  .hl-swatch.green{background:#00dc82;}
+  .hl-swatch.pink{background:#ff50a0;}
+  .hl-swatch.blue{background:#50a0ff;}
+
+  /* VIEWER */
+  .viewer{flex:1;display:flex;overflow:hidden;}
+  .pane{flex:1;display:flex;flex-direction:column;border-right:1px solid var(--border);overflow:hidden;position:relative;}
+  .pane:last-child{border-right:none;}
+  .pane-bar{height:34px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 12px;gap:8px;flex-shrink:0;}
+  .pane-tag{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:500;padding:2px 7px;border-radius:3px;}
+  .pane-tag.a{background:rgba(91,106,240,.15);color:var(--accent);}
+  .pane-tag.b{background:rgba(34,211,165,.15);color:var(--accent2);}
+  .pane-info{font-size:11px;color:var(--muted);}
+  .page-counter{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);}
+  .canvas-wrap{flex:1;overflow-y:scroll;overflow-x:auto;background:#111;position:relative;}
+  .drop-zone{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;cursor:pointer;transition:background .2s;user-select:none;}
+  .drop-zone:hover,.drop-zone.drag-over{background:rgba(91,106,240,.05);}
+  .drop-icon{width:52px;height:52px;border-radius:12px;border:1.5px dashed var(--border);display:flex;align-items:center;justify-content:center;font-size:22px;pointer-events:none;}
+  .drop-zone:hover .drop-icon{border-color:var(--accent);}
+  .drop-label{font-size:13px;color:var(--muted);text-align:center;line-height:1.6;pointer-events:none;}
+  .drop-sub{font-size:11px;color:#3a3a48;}
+
+  /* Page wrapper */
+  .page-wrap{position:relative;margin:10px auto;display:block;box-shadow:0 4px 20px rgba(0,0,0,.5);}
+  .page-wrap canvas{display:block;}
+
+  /* Text layer (PDF.js) */
+  .page-wrap .textLayer{
+    position:absolute;
+    top:0;left:0;
+    width:100%;height:100%;
+    overflow:hidden;
+    opacity:1;
+    line-height:1;
+    pointer-events:auto;
+  }
+  .textLayer span{
+    color:transparent;
+    position:absolute;
+    white-space:pre;
+    cursor:text;
+    transform-origin:0% 0%;
+  }
+  .textLayer ::selection{background:rgba(91,106,240,0.35);}
+
+  /* Highlight layer */
+  .hl-layer{
+    position:absolute;
+    top:0;left:0;
+    width:100%;height:100%;
+    pointer-events:none;
+    overflow:hidden;
+  }
+  .hl-mark{
+    position:absolute;
+    border-radius:2px;
+    mix-blend-mode:multiply;
+  }
+  /* mirror highlight – softer blue */
+  .mirror-hl .hl-mark {
+    mix-blend-mode: normal;
+    background: rgba(0,120,255,0.2) !important;
+  }
+
+  /* Loading */
+  .load-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#111;z-index:20;}
+  .spinner{width:26px;height:26px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .load-text{font-size:12px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+
+  /* Highlight popup */
+  #hlPopup{
+    position:fixed;
+    z-index:9999;
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:6px 8px;
+    display:none;
+    align-items:center;
+    gap:6px;
+    box-shadow:0 8px 24px rgba(0,0,0,.5);
+  }
+  #hlPopup button{
+    padding:5px 11px;
+    border-radius:5px;
+    border:1px solid var(--border);
+    background:transparent;
+    color:var(--text);
+    font-size:11px;
+    font-family:'IBM Plex Mono',monospace;
+    cursor:pointer;
+    transition:background .15s;
+  }
+  #hlPopup button:hover{background:rgba(255,255,255,.07);}
+  #hlPopup .dot{width:12px;height:12px;border-radius:50%;flex-shrink:0;}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div class="logo">⟷ PDF SYNC</div>
+  <div class="toolbar-slots">
+    <div class="slot">
+      <span class="slot-label a">A</span>
+      <span class="file-name empty" id="nameA">nenhum arquivo</span>
+      <button class="btn-load" id="btnA">Abrir PDF</button>
+    </div>
+    <div class="slot">
+      <span class="slot-label b">B</span>
+      <span class="file-name empty" id="nameB">nenhum arquivo</span>
+      <button class="btn-load" id="btnB">Abrir PDF</button>
+    </div>
+  </div>
+  <div class="hl-picker">
+    <span class="hl-label">marca</span>
+    <div class="hl-swatch yellow active" data-color="yellow" title="Amarelo"></div>
+    <div class="hl-swatch green" data-color="green" title="Verde"></div>
+    <div class="hl-swatch pink" data-color="pink" title="Rosa"></div>
+    <div class="hl-swatch blue" data-color="blue" title="Azul"></div>
+  </div>
+  <div class="sync-indicator">
+    <div class="sync-dot" id="syncDot"></div>
+    <span class="sync-text" id="syncText">aguardando</span>
+  </div>
+</div>
+
+<div class="viewer">
+  <div class="pane" id="paneA">
+    <div class="pane-bar">
+      <span class="pane-tag a">A</span>
+      <span class="pane-info" id="infoA">—</span>
+      <span class="page-counter" id="counterA"></span>
+    </div>
+    <div class="drop-zone" id="dropA">
+      <div class="drop-icon">📄</div>
+      <div class="drop-label">Clique ou arraste o PDF aqui<br><span class="drop-sub">versão em inglês</span></div>
+    </div>
+    <div class="canvas-wrap" id="canvasA" style="display:none"></div>
+  </div>
+  <div class="pane" id="paneB">
+    <div class="pane-bar">
+      <span class="pane-tag b">B</span>
+      <span class="pane-info" id="infoB">—</span>
+      <span class="page-counter" id="counterB"></span>
+    </div>
+    <div class="drop-zone" id="dropB">
+      <div class="drop-icon">📄</div>
+      <div class="drop-label">Clique ou arraste o PDF aqui<br><span class="drop-sub">versão em português</span></div>
+    </div>
+    <div class="canvas-wrap" id="canvasB" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Highlight popup -->
+<div id="hlPopup">
+  <div class="dot" id="hlDot"></div>
+  <button id="hlBtn">Destacar</button>
+  <button id="hlClear">✕</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const SCALE = 1.3;
+const OVERSCAN = 1;
+const docs = { A: null, B: null };
+let syncing = false;
+let activeColor = 'yellow';
+
+const colorMap = {
+  yellow: 'rgba(255,220,0,0.4)',
+  green:  'rgba(0,220,130,0.4)',
+  pink:   'rgba(255,80,160,0.4)',
+  blue:   'rgba(80,160,255,0.4)',
+};
+
+// ── Color picker ──
+document.querySelectorAll('.hl-swatch').forEach(sw => {
+  sw.addEventListener('click', () => {
+    document.querySelectorAll('.hl-swatch').forEach(s => s.classList.remove('active'));
+    sw.classList.add('active');
+    activeColor = sw.dataset.color;
+    document.getElementById('hlDot').style.background = colorMap[activeColor];
+  });
+});
+
+// ── File picking ──
+function pickFile(side) {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'application/pdf';
+  inp.style.cssText = 'position:fixed;top:-999px';
+  document.body.appendChild(inp);
+  inp.addEventListener('change', () => { const f=inp.files[0]; inp.remove(); if(f) initPDF(f, side); });
+  setTimeout(() => inp.click(), 10);
+}
+document.getElementById('btnA').addEventListener('click', e => { e.stopPropagation(); pickFile('A'); });
+document.getElementById('btnB').addEventListener('click', e => { e.stopPropagation(); pickFile('B'); });
+document.getElementById('dropA').addEventListener('click', () => pickFile('A'));
+document.getElementById('dropB').addEventListener('click', () => pickFile('B'));
+['A','B'].forEach(side => {
+  const z = document.getElementById('drop'+side);
+  z.addEventListener('dragover', e => { e.preventDefault(); z.classList.add('drag-over'); });
+  z.addEventListener('dragleave', () => z.classList.remove('drag-over'));
+  z.addEventListener('drop', e => {
+    e.preventDefault(); z.classList.remove('drag-over');
+    const f = [...e.dataTransfer.files].find(x => x.type==='application/pdf');
+    if(f) initPDF(f, side);
+  });
+});
+
+// ── Init PDF ──
+async function initPDF(file, side) {
+  const wrap = document.getElementById('canvas'+side);
+  const drop = document.getElementById('drop'+side);
+  drop.style.display = 'none';
+  wrap.style.display = 'block';
+  wrap.innerHTML = `<div class="load-overlay"><div class="spinner"></div><div class="load-text">carregando...</div></div>`;
+
+  let pdf;
+  try {
+    const buf = await file.arrayBuffer();
+    pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  } catch(e) {
+    wrap.innerHTML = `<div class="load-overlay"><div class="load-text" style="color:#f87171">Erro ao abrir PDF</div></div>`;
+    return;
+  }
+
+  const firstPage = await pdf.getPage(1);
+  const vp0 = firstPage.getViewport({ scale: SCALE });
+  const PW = Math.floor(vp0.width);
+  const PH = Math.floor(vp0.height);
+
+  wrap.innerHTML = '';
+  const inner = document.createElement('div');
+  inner.style.cssText = 'padding:10px;display:flex;flex-direction:column;align-items:center;gap:10px;';
+  wrap.appendChild(inner);
+
+  const slots = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const pw = document.createElement('div');
+    pw.className = 'page-wrap';
+    pw.style.cssText = `width:${PW}px;height:${PH}px;`;
+    pw.dataset.page = i;
+    pw.dataset.side = side;
+
+    // highlight layer (behind text)
+    const hlLayer = document.createElement('div');
+    hlLayer.className = 'hl-layer';
+    pw.appendChild(hlLayer);
+
+    inner.appendChild(pw);
+    slots.push({ el: pw, hlLayer, rendered: false, rendering: false, highlights: [] });
+  }
+
+  docs[side] = { pdf, pageCount: pdf.numPages, slots, PW, PH };
+
+  document.getElementById('name'+side).textContent = file.name;
+  document.getElementById('name'+side).classList.remove('empty');
+  document.getElementById('info'+side).textContent = pdf.numPages + ' páginas';
+  updateSyncStatus();
+
+  wrap.addEventListener('scroll', () => onScroll(side), { passive: true });
+  renderVisible(side);
+}
+
+// ── Lazy render ──
+async function renderVisible(side) {
+  const doc = docs[side];
+  if (!doc) return;
+  const wrap = document.getElementById('canvas'+side);
+  const wrapTop = wrap.scrollTop;
+  const wrapBot = wrapTop + wrap.clientHeight;
+  const { PH, slots } = doc;
+  const step = PH + 10;
+
+  // Update counter
+  const idx = Math.max(0, Math.floor((wrapTop - 10) / step));
+  document.getElementById('counter'+side).textContent = (idx+1) + ' / ' + doc.pageCount;
+
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+    if (slot.rendered || slot.rendering) continue;
+    const top = 10 + i * step;
+    const bot = top + PH;
+    if (bot >= wrapTop - OVERSCAN * PH && top <= wrapBot + OVERSCAN * PH) {
+      await renderPage(side, i);
+    }
+  }
+}
+
+async function renderPage(side, idx) {
+  const doc = docs[side];
+  const slot = doc.slots[idx];
+  if (slot.rendered || slot.rendering) return;
+  slot.rendering = true;
+
+  try {
+    const page = await doc.pdf.getPage(idx + 1);
+    const vp = page.getViewport({ scale: SCALE });
+
+    // Canvas
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(vp.width);
+    canvas.height = Math.floor(vp.height);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+
+    // Text layer
+    const textDiv = document.createElement('div');
+    textDiv.className = 'textLayer';
+
+    const textContent = await page.getTextContent();
+    await pdfjsLib.renderTextLayer({
+      textContentSource: textContent,
+      container: textDiv,
+      viewport: vp,
+      textDivs: []
+    }).promise;
+
+    // Insert: canvas first, then hl-layer, then text layer
+    const hlLayer = slot.hlLayer;
+    slot.el.innerHTML = '';
+    slot.el.appendChild(canvas);
+    slot.el.appendChild(hlLayer);
+    slot.el.appendChild(textDiv);
+    slot.el.style.height = 'auto';
+
+    slot.rendered = true;
+    slot.rendering = false;
+
+    // Restore any existing highlights
+    redrawHighlights(side, idx);
+  } catch(e) {
+    slot.rendering = false;
+  }
+}
+
+// ── Highlight logic ──
+let pendingSelection = null;
+
+document.addEventListener('mouseup', (e) => {
+  // Don't intercept popup clicks
+  if (e.target.closest('#hlPopup')) return;
+
+  setTimeout(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.toString().trim() === '') {
+      clearMirrorHighlight();
+      hidePopup();
+      return;
+    }
+
+    // Find which page-wrap the selection is in
+    const range = sel.getRangeAt(0);
+    const pageWrap = range.commonAncestorContainer.nodeType === 1
+      ? range.commonAncestorContainer.closest('.page-wrap')
+      : range.commonAncestorContainer.parentElement?.closest('.page-wrap');
+
+    if (!pageWrap) { clearMirrorHighlight(); hidePopup(); return; }
+
+    const side = pageWrap.dataset.side;
+    const pageIdx = parseInt(pageWrap.dataset.page) - 1;
+
+    // Get rects relative to page-wrap
+    const wrapRect = pageWrap.getBoundingClientRect();
+    const rects = [...range.getClientRects()].map(r => ({
+      left: r.left - wrapRect.left,
+      top: r.top - wrapRect.top,
+      width: r.width,
+      height: r.height,
+    })).filter(r => r.width > 0 && r.height > 0);
+
+    if (rects.length === 0) { clearMirrorHighlight(); hidePopup(); return; }
+
+    pendingSelection = { side, pageIdx, rects, text: sel.toString() };
+
+    // Position popup near selection end
+    const lastRect = range.getClientRects()[range.getClientRects().length - 1];
+    showPopup(lastRect.right, lastRect.bottom + window.scrollY + 8);
+
+    // Mirror selection highlight on the other side (temporary)
+    updateMirrorHighlight();
+  }, 10);
+});
+
+function showPopup(x, y) {
+  const pop = document.getElementById('hlPopup');
+  document.getElementById('hlDot').style.background = colorMap[activeColor];
+  pop.style.display = 'flex';
+  // Clamp to viewport
+  const pw = 160;
+  pop.style.left = Math.min(x, window.innerWidth - pw - 10) + 'px';
+  pop.style.top = y + 'px';
+}
+
+function hidePopup() {
+  document.getElementById('hlPopup').style.display = 'none';
+}
+
+// ── Mirror highlight (temporary) ──
+function clearMirrorHighlight() {
+  if (window.__mirrorEl) {
+    window.__mirrorEl.remove();
+    window.__mirrorEl = null;
+    window.__mirrorSide = null;
+  }
+}
+
+function updateMirrorHighlight() {
+  clearMirrorHighlight();
+  if (!pendingSelection) return;
+  const otherSide = pendingSelection.side === 'A' ? 'B' : 'A';
+  const otherDoc = docs[otherSide];
+  if (!otherDoc || !otherDoc.slots[pendingSelection.pageIdx]) return;
+
+  const otherSlot = otherDoc.slots[pendingSelection.pageIdx];
+  const mirrorContainer = document.createElement('div');
+  mirrorContainer.className = 'mirror-hl';
+  mirrorContainer.style.position = 'absolute';
+  mirrorContainer.style.top = '0';
+  mirrorContainer.style.left = '0';
+  mirrorContainer.style.width = '100%';
+  mirrorContainer.style.height = '100%';
+  mirrorContainer.style.pointerEvents = 'none';
+
+  pendingSelection.rects.forEach(r => {
+    const mark = document.createElement('div');
+    mark.className = 'hl-mark';
+    mark.style.cssText = `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;`;
+    mirrorContainer.appendChild(mark);
+  });
+
+  otherSlot.hlLayer.appendChild(mirrorContainer);
+  window.__mirrorEl = mirrorContainer;
+  window.__mirrorSide = otherSide;
+}
+
+// ── Popup buttons ──
+document.getElementById('hlBtn').addEventListener('click', () => {
+  if (!pendingSelection) return;
+  const { side, pageIdx, rects } = pendingSelection;
+  const doc = docs[side];
+  if (!doc) return;
+
+  // Add highlight to selected side
+  const slot = doc.slots[pageIdx];
+  slot.highlights.push({ rects, color: colorMap[activeColor] });
+  redrawHighlights(side, pageIdx);
+
+  // Mirror highlight permanently on the other side
+  const otherSide = side === 'A' ? 'B' : 'A';
+  const otherDoc = docs[otherSide];
+  if (otherDoc && otherDoc.slots[pageIdx]) {
+    otherDoc.slots[pageIdx].highlights.push({ rects, color: colorMap[activeColor] });
+    redrawHighlights(otherSide, pageIdx);
+  }
+
+  // Clean up
+  clearMirrorHighlight();
+  window.getSelection().removeAllRanges();
+  hidePopup();
+  pendingSelection = null;
+});
+
+document.getElementById('hlClear').addEventListener('click', () => {
+  clearMirrorHighlight();
+  window.getSelection().removeAllRanges();
+  hidePopup();
+  pendingSelection = null;
+});
+
+function redrawHighlights(side, pageIdx) {
+  const doc = docs[side];
+  if (!doc) return;
+  const slot = doc.slots[pageIdx];
+  const layer = slot.hlLayer;
+  layer.innerHTML = '';
+  slot.highlights.forEach(hl => {
+    hl.rects.forEach(r => {
+      const mark = document.createElement('div');
+      mark.className = 'hl-mark';
+      mark.style.cssText = `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;background:${hl.color};`;
+      layer.appendChild(mark);
+    });
+  });
+}
+
+// ── Scroll sync ──
+function onScroll(side) {
+  renderVisible(side);
+  if (syncing || !docs.A || !docs.B) return;
+  const wrap = document.getElementById('canvas'+side);
+  const max = wrap.scrollHeight - wrap.clientHeight;
+  if (max <= 0) return;
+  const pct = wrap.scrollTop / max;
+  syncing = true;
+  const other = side === 'A' ? 'B' : 'A';
+  const ow = document.getElementById('canvas'+other);
+  ow.scrollTop = pct * (ow.scrollHeight - ow.clientHeight);
+  renderVisible(other);
+  requestAnimationFrame(() => { syncing = false; });
+}
+
+function updateSyncStatus() {
+  const dot = document.getElementById('syncDot');
+  const txt = document.getElementById('syncText');
+  if (docs.A && docs.B) {
+    dot.classList.add('active'); txt.textContent = 'sincronizado'; txt.style.color = 'var(--accent2)';
+  } else {
+    dot.classList.remove('active');
+    txt.textContent = docs.A || docs.B ? 'aguardando outro PDF' : 'aguardando';
+    txt.style.color = '';
+  }
+}
+</script>
+</body>
+</html>
